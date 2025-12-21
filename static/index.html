@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Agent 对话界面</title>
+    <style>
+        /* 基础样式，确保页面正常显示 */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: Arial, sans-serif;
+        }
+        .container {
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .input-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #333;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            width: 100%;
+            margin-bottom: 20px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .result-area {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            background-color: #f8f9fa;
+            min-height: 80px;
+        }
+        /* 提示样式 */
+        .error { color: #dc3545; } /* 红色错误 */
+        .success { color: #28a745; } /* 绿色成功 */
+        .loading { color: #666; font-style: italic; } /* 灰色加载 */
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 style="text-align: center; margin-bottom: 30px; color: #333;">AI Agent 对话界面</h1>
+        
+        <!-- 输入区域 -->
+        <div class="input-group">
+            <label for="sessionId">会话ID（Session ID）：</label>
+            <input type="text" id="sessionId" placeholder="例如：session456" value="session456">
+        </div>
+        
+        <div class="input-group">
+            <label for="userId">用户ID（User ID）：</label>
+            <input type="text" id="userId" placeholder="例如：user123" value="user123">
+        </div>
+        
+        <div class="input-group">
+            <label for="userInput">对话内容：</label>
+            <textarea id="userInput" placeholder="请输入你想和Agent说的内容...">推荐一款适合我的饮品</textarea>
+        </div>
+        
+        <button id="submitBtn">发送请求</button>
+        
+        <!-- 结果展示区域 -->
+        <div class="input-group">
+            <label>Agent回复结果：</label>
+            <div id="result" class="result-area">
+                点击“发送请求”获取回复...
+            </div>
+        </div>
+    </div>
+
+    <!-- JS代码必须放在<script>标签内，且在页面元素加载完成后 -->
+    <script>
+        // 等待页面加载完成后执行
+        document.addEventListener('DOMContentLoaded', function() {
+            // 绑定按钮点击事件
+            document.getElementById('submitBtn').addEventListener('click', async function() {
+                // 1. 获取输入值
+                const sessionId = document.getElementById('sessionId').value.trim();
+                const userId = document.getElementById('userId').value.trim();
+                const userInput = document.getElementById('userInput').value.trim();
+                
+                // 2. 校验输入
+                if (!sessionId || !userId || !userInput) {
+                    document.getElementById('result').innerHTML = '<span class="error">错误：会话ID、用户ID、对话内容不能为空！</span>';
+                    return;
+                }
+                
+                // 3. 展示加载状态
+                const resultDom = document.getElementById('result');
+                resultDom.innerHTML = '<span class="loading">正在调用Agent接口，请稍候...</span>';
+                
+                try {
+                    // 核心优化1：添加请求超时（5秒）
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+                    // 4. 调用后台/agent/chat接口
+                    const response = await fetch('/agent/chat', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            session_id: sessionId,
+                            user_id: userId,
+                            input: userInput
+                        }),
+                        signal: controller.signal, // 绑定超时控制器
+                    });
+
+                    clearTimeout(timeoutId); // 清除超时定时器
+
+                    // 核心优化2：处理非200状态码（比如400/500）
+                    if (!response.ok) {
+                        // 尝试解析错误信息，若解析失败则返回状态码
+                        let errMsg = `请求失败（状态码：${response.status}）`;
+                        try {
+                            const errData = await response.json();
+                            errMsg = `请求失败：${errData.msg || errMsg}`;
+                        } catch (e) {}
+                        resultDom.innerHTML = `<span class="error">${errMsg}</span>`;
+                        return;
+                    }
+
+                    // 5. 解析响应
+                    const data = await response.json();
+                    
+                    // 6. 展示结果
+                    if (data.code === 200) {
+                        resultDom.innerHTML = `<span class="success">${data.data}</span>`;
+                    } else {
+                        resultDom.innerHTML = `<span class="error">接口返回错误：${data.msg}</span>`;
+                    }
+                } catch (error) {
+                    // 7. 捕获网络错误/超时/解析错误
+                    if (error.name === 'AbortError') {
+                        resultDom.innerHTML = '<span class="error">请求超时（5秒），请检查服务是否正常！</span>';
+                    } else {
+                        resultDom.innerHTML = `<span class="error">请求失败：${error.message}</span>`;
+                    }
+                }
+            });
+        });
+    </script>
+</body>
+</html>
