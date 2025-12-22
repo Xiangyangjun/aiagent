@@ -1,170 +1,20 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"net/http"
-	"os"
-	"sync"
 	"time"
+
+	"simple-go-agent/llm"
+	"simple-go-agent/util"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
 
-// ---------------------- 1. 记忆模块（保持不变） ----------------------
-var (
-	shortTermMemory = make(map[string]string)
-	mtx             sync.RWMutex
-)
-
-const longTermMemoryFile = "long_term_memory.json"
-
-// 加载长期记忆（按用户ID）
-func loadLongTermMemory(userID string) map[string]string {
-	if _, err := os.Stat(longTermMemoryFile); os.IsNotExist(err) {
-		_ = ioutil.WriteFile(longTermMemoryFile, []byte("{}"), 0644)
-		return map[string]string{}
-	}
-
-	data, err := ioutil.ReadFile(longTermMemoryFile)
-	if err != nil {
-		return map[string]string{}
-	}
-
-	var allMemory map[string]map[string]string
-	err = json.Unmarshal(data, &allMemory)
-	if err != nil {
-		return map[string]string{}
-	}
-
-	return allMemory[userID]
-}
-
-// 保存长期记忆
-func saveLongTermMemory(userID, key, value string) {
-	data, _ := ioutil.ReadFile(longTermMemoryFile)
-	var allMemory map[string]map[string]string
-	_ = json.Unmarshal(data, &allMemory)
-
-	if allMemory == nil {
-		allMemory = make(map[string]map[string]string)
-	}
-	if allMemory[userID] == nil {
-		allMemory[userID] = make(map[string]string)
-	}
-
-	allMemory[userID][key] = value
-	newData, _ := json.MarshalIndent(allMemory, "", "  ")
-	_ = ioutil.WriteFile(longTermMemoryFile, newData, 0644)
-}
-
-// ---------------------- 2. 大模型调用（保持不变） ----------------------
-func callLLM(sessionID, userID, userInput string) string {
-	// 1. 加载记忆
-	mtx.RLock()
-	shortMem := shortTermMemory[sessionID]
-	mtx.RUnlock()
-	longMem := loadLongTermMemory(userID)
-
-	// 2. 构造Prompt
-	longMemStr := "无"
-	if len(longMem) > 0 {
-		longMemStr = fmt.Sprintf("用户偏好：%v", longMem)
-	}
-	prompt := fmt.Sprintf(`
-	你是一个极简AI Agent，结合以下信息回复用户：
-	1. 会话上下文：%s
-	2. %s
-	3. 用户当前输入：%s
-	要求：回复简洁，不超过50字。
-	`, shortMem, longMemStr, userInput)
-
-	// 3. 构造通义千问HTTP请求
-	apiKey := os.Getenv("DASHSCOPE_API_KEY")
-	if apiKey == "" {
-		return "请先配置DASHSCOPE_API_KEY"
-	}
-
-	apiURL := "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
-
-	// 请求体
-	reqBody := map[string]interface{}{
-		"model": "qwen-turbo",
-		"input": map[string]interface{}{
-			"messages": []map[string]interface{}{
-				{
-					"role":    "user",
-					"content": prompt,
-				},
-			},
-		},
-		"parameters": map[string]interface{}{
-			"temperature":   0.5,
-			"result_format": "message",
-		},
-	}
-	reqBodyBytes, err := json.Marshal(reqBody)
-	if err != nil {
-		return "请求构造失败：" + err.Error()
-	}
-
-	// 发送HTTP请求
-	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(reqBodyBytes))
-	if err != nil {
-		return "请求创建失败：" + err.Error()
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	// 执行请求
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "调用大模型失败：" + err.Error()
-	}
-	defer resp.Body.Close()
-
-	// 解析响应
-	respBody, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return "解析响应失败：" + err.Error()
-	}
-
-	// 解析JSON响应
-	var respData map[string]interface{}
-	err = json.Unmarshal(respBody, &respData)
-	if err != nil {
-		return "解析JSON失败：" + string(respBody)
-	}
-
-	// 提取回复内容
-	output, ok := respData["output"].(map[string]interface{})
-	if !ok {
-		return "响应格式错误：" + string(respBody)
-	}
-	choices, ok := output["choices"].([]interface{})
-	if !ok || len(choices) == 0 {
-		return "无回复内容：" + string(respBody)
-	}
-	choice := choices[0].(map[string]interface{})
-	message := choice["message"].(map[string]interface{})
-	reply := message["content"].(string)
-
-	// 4. 更新短期记忆
-	newShortMem := fmt.Sprintf("%s\n用户：%s\nAgent：%s", shortMem, userInput, reply)
-	mtx.Lock()
-	shortTermMemory[sessionID] = newShortMem
-	mtx.Unlock()
-
-	return reply
-}
-
-// ---------------------- 3. HTTP接口（修复路由冲突） ----------------------
 func main() {
+	defer util.FreeJieba()
 	// 加载.env配置
 	_ = godotenv.Load()
 
@@ -191,6 +41,7 @@ func main() {
 	})
 
 	// 接口1：核心对话
+	// ---------------------- 原有代码不变，新增关键字提取函数后，修改chat接口 ----------------------
 	r.POST("/agent/chat", func(c *gin.Context) {
 		// 定义接收参数的结构体
 		var req struct {
@@ -206,7 +57,26 @@ func main() {
 			return
 		}
 
-		reply := callLLM(req.SessionID, req.UserID, req.Input)
+		// 核心新增步骤1：提取用户输入的关键字
+		keywords := util.ExtractKeywords(req.Input)
+		fmt.Printf("用户[%s]输入的关键字：%s\n", req.UserID, keywords) // 可选：日志打印
+
+		// 核心新增步骤2：调用大模型获取回复
+		reply := llm.CallLLM(req.SessionID, req.UserID, req.Input)
+
+		// 若已有关键字，合并后再保存（避免覆盖）
+		// 1. 加载用户已保存的历史关键字
+		existingMem := util.LoadLongTermMemory(req.UserID)
+		existingKeywords := existingMem["keywords"]
+
+		// 2. 一行调用MergeKeywords：自动处理空值、去重、限制最多20个关键字
+		// 入参：历史关键字 + 本次新提取的关键字（keywords）
+		mergedKeywords := util.MergeKeywords(existingKeywords, keywords)
+
+		// 3. 直接保存合并后的结果（无需if-else，MergeKeywords已兜底）
+		util.SaveLongTermMemory(req.UserID, "keywords", mergedKeywords)
+
+		// 返回结果（原有逻辑不变）
 		c.JSON(http.StatusOK, gin.H{
 			"code": 200,
 			"msg":  "success",
@@ -230,7 +100,7 @@ func main() {
 			return
 		}
 
-		saveLongTermMemory(req.UserID, req.Key, req.Value)
+		util.SaveLongTermMemory(req.UserID, req.Key, req.Value)
 		c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "偏好保存成功"})
 	})
 
