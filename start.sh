@@ -1,1 +1,1 @@
-DASHSCOPE_API_KEY=sk-21c5679fdf204dc9928a322e2738a75f nohup ./agent >> log.txt &
+ALIYUN_TTS_KEY=sk-21c5679fdf204dc9928a322e2738a75f DASHSCOPE_API_KEY=sk-21c5679fdf204dc9928a322e2738a75f nohup ./agent >> log.txt &

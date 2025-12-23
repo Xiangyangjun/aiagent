@@ -12,6 +12,7 @@ type ChatRound struct {
 	UserID    string    // 用户ID（核心标识）
 	Input     string    // 用户输入内容
 	Timestamp time.Time // 时间戳（用于排序和截断）
+	Reply     string
 }
 
 // 全局存储+锁（保证并发安全）
