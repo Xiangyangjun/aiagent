@@ -7,60 +7,117 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
-	"simple-go-agent/util"
+	"simple-go-agent/memory"
 	"strings"
-	"sync"
 )
 
-var (
-	shortTermMemory = make(map[string]string)
-	mtx             sync.RWMutex
-)
+// ---------------------- 仅保留：关键词提取+大模型调用逻辑（依赖memory包） ----------------------
+// ExtractHabitKeywords 提取关键词（改为调用memory包的短期记忆）
+func ExtractHabitKeywords(userID string) string {
+	// 从memory包获取用户近10轮对话上下文（核心修正）
+	shortContext := memory.GetShortTermContext(userID)
 
-// ---------------------- 2. 大模型调用（保持不变） ----------------------
-func CallLLM(sessionID, userID, userInput string) string {
-	// 1. 加载记忆
-	mtx.RLock()
-	shortMem := shortTermMemory[sessionID]
-	mtx.RUnlock()
-	longMem := util.LoadLongTermMemory(userID)
+	// 构造提取关键词的Prompt（逻辑不变）
+	prompt := fmt.Sprintf(`
+请基于用户最近10轮对话上下文，提取其中明确提及的「习惯/爱好」类核心关键词，要求：
+1. 仅返回中文关键词，用逗号分隔，无任何解释、说明或多余文字；
+2. 关键词简洁（如：钓鱼、看电影、户外、跑步），不重复；
+3. 只提取用户明确提及的内容，不猜测、不编造、不扩展；
+4. 无相关习惯/爱好则返回"无"。
 
-	fmt.Printf("longMem: %v\n", longMem)
-	// 2. 构造Prompt
-	longMemStr := "无"
-	// 替换原有longMemStr拼接逻辑
-	if len(longMem) > 0 {
-		// 拼接自然的键值对字符串
-		var memItems []string
-		for key, value := range longMem {
-			// 过滤空值/无意义值
-			if value == "" || value == "无" {
-				continue
-			}
-			// 键名更人性化（比如keywords→关键字，hobby→爱好）
-			friendlyKey := map[string]string{
-				"keywords": "关键字",
-				"hobby":    "爱好",
-				"prefer":   "偏好",
-			}[key]
-			if friendlyKey == "" {
-				friendlyKey = key // 未匹配的键保留原名称
-			}
-			memItems = append(memItems, fmt.Sprintf("%s：%s", friendlyKey, value))
-		}
-		// 处理无有效记忆的情况
-		if len(memItems) == 0 {
-			longMemStr = "用户暂无有效偏好信息"
-		} else {
-			longMemStr = fmt.Sprintf("用户偏好：%s", strings.Join(memItems, "；"))
-		}
-	} else {
+用户近10轮对话上下文：%s
+`, shortContext)
+
+	// 调用阿里通义千问（逻辑不变）
+	apiKey := os.Getenv("DASHSCOPE_API_KEY")
+	if apiKey == "" {
+		return "无"
+	}
+
+	apiURL := "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
+	reqBody := map[string]interface{}{
+		"model": "qwen-turbo",
+		"input": map[string]interface{}{
+			"messages": []map[string]interface{}{
+				{
+					"role":    "user",
+					"content": prompt,
+				},
+			},
+		},
+		"parameters": map[string]interface{}{
+			"temperature":   0.1,
+			"result_format": "message",
+			"max_tokens":    100,
+		},
+	}
+
+	reqBodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return "无"
+	}
+
+	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(reqBodyBytes))
+	if err != nil {
+		return "无"
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "无"
+	}
+	defer resp.Body.Close()
+
+	respBody, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "无"
+	}
+
+	var respData map[string]interface{}
+	err = json.Unmarshal(respBody, &respData)
+	if err != nil {
+		return "无"
+	}
+
+	// 提取关键词（逻辑不变）
+	output, ok := respData["output"].(map[string]interface{})
+	if !ok {
+		return "无"
+	}
+	choices, ok := output["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		return "无"
+	}
+	choice := choices[0].(map[string]interface{})
+	message := choice["message"].(map[string]interface{})
+	keywords := strings.TrimSpace(message["content"].(string))
+
+	if keywords == "" || keywords == "无" {
+		return "无"
+	}
+	return keywords
+}
+
+// CallLLM 调用大模型生成回复（核心修正：依赖memory包管理记忆）
+func CallLLM(sessionID, userID, userInput string) (string, error) { // 修正：返回error，方便上层处理
+	// 1. 读取长期记忆（改为调用memory包）
+	longKeywords := memory.GetLongTerm(userID)
+	longMemStr := fmt.Sprintf("用户偏好关键词：%s", longKeywords)
+	if longKeywords == "无" {
 		longMemStr = "用户暂无偏好信息"
 	}
+
+	// 2. 获取短期记忆上下文（调用memory包）
+	shortMem := memory.GetShortTermContext(userID)
+
+	// 3. 构造Prompt（逻辑不变）
 	prompt := fmt.Sprintf(`
 你是一个生活化、有同理心的AI助手，核心目标是基于用户的全量对话信息和长期偏好，生成有温度、个性化的回复。
 【参考信息】
-1. 历史会话上下文（按时间从旧到新排序）：%s
+1. 历史会话上下文（最近10轮，按时间从旧到新排序）：%s
    - 规则：优先参考近3轮对话内容，确保回复承接上下文，不偏离用户对话逻辑
 2. 用户的长期偏好/记忆（核心标签+偏好程度）：%s
    - 规则：仅作为个性化补充，不强行关联，避免偏离当前提问核心
@@ -75,15 +132,14 @@ func CallLLM(sessionID, userID, userInput string) string {
 `, shortMem, longMemStr, userInput)
 
 	fmt.Printf("prompt: %s\n", prompt)
-	// 3. 构造通义千问HTTP请求
+
+	// 4. 调用阿里通义千问（逻辑不变，修正错误处理）
 	apiKey := os.Getenv("DASHSCOPE_API_KEY")
 	if apiKey == "" {
-		return "请先配置DASHSCOPE_API_KEY"
+		return "", fmt.Errorf("请先配置DASHSCOPE_API_KEY环境变量")
 	}
 
 	apiURL := "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
-
-	// 请求体
 	reqBody := map[string]interface{}{
 		"model": "qwen-turbo",
 		"input": map[string]interface{}{
@@ -101,56 +157,56 @@ func CallLLM(sessionID, userID, userInput string) string {
 	}
 	reqBodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
-		return "请求构造失败：" + err.Error()
+		return "", fmt.Errorf("请求构造失败：%w", err)
 	}
 
-	// 发送HTTP请求
 	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(reqBodyBytes))
 	if err != nil {
-		return "请求创建失败：" + err.Error()
+		return "", fmt.Errorf("请求创建失败：%w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	// 执行请求
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "调用大模型失败：" + err.Error()
+		return "", fmt.Errorf("调用大模型失败：%w", err)
 	}
 	defer resp.Body.Close()
 
-	// 解析响应
 	respBody, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return "解析响应失败：" + err.Error()
+		return "", fmt.Errorf("解析响应失败：%w", err)
 	}
 
-	// 解析JSON响应
 	var respData map[string]interface{}
 	err = json.Unmarshal(respBody, &respData)
 	if err != nil {
-		return "解析JSON失败：" + string(respBody)
+		return "", fmt.Errorf("解析JSON失败：%w，响应内容：%s", err, string(respBody))
 	}
 
-	// 提取回复内容
+	// 提取回复内容（修正错误处理）
 	output, ok := respData["output"].(map[string]interface{})
 	if !ok {
-		return "响应格式错误：" + string(respBody)
+		return "", fmt.Errorf("响应格式错误，output字段不存在：%s", string(respBody))
 	}
 	choices, ok := output["choices"].([]interface{})
 	if !ok || len(choices) == 0 {
-		return "无回复内容：" + string(respBody)
+		return "", fmt.Errorf("无回复内容，choices字段为空：%s", string(respBody))
 	}
 	choice := choices[0].(map[string]interface{})
-	message := choice["message"].(map[string]interface{})
-	reply := message["content"].(string)
+	message, ok := choice["message"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("响应格式错误，message字段不存在：%s", string(respBody))
+	}
+	reply, ok := message["content"].(string)
+	if !ok {
+		return "", fmt.Errorf("响应格式错误，content字段不存在：%s", string(respBody))
+	}
 
-	// 4. 更新短期记忆
-	newShortMem := fmt.Sprintf("%s\n用户：%s\nAgent：%s", shortMem, userInput, reply)
-	mtx.Lock()
-	shortTermMemory[sessionID] = newShortMem
-	mtx.Unlock()
+	// 5. 提取关键词并更新长期记忆（调用memory包）
+	newKeywords := ExtractHabitKeywords(userID)
+	memory.MergeAndSaveLongTerm(userID, newKeywords)
 
-	return reply
+	return reply, nil
 }
