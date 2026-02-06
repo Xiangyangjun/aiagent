@@ -1,0 +1,8 @@
+{
+  "dashscope_api_key": "your_dashscope_api_key_here",
+  "aliyun_tts_key": "sk-21c5679fdf204dc9928a322e2738a75f",
+  "log_level": "INFO",
+  "log_file": "",
+  "server_port": 8443,
+  "data_dir": "./data"
+}

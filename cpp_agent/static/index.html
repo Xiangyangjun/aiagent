@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Agent</title>
+    <style>
+        /* 原有样式不变，仅保留 */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: Arial, sans-serif;
+        }
+        .container {
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .input-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #333;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            width: 100%;
+            margin-bottom: 20px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .result-area {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            background-color: #f8f9fa;
+            min-height: 80px;
+        }
+        /* 语音播放区域样式 */
+        .audio-area {
+            margin-top: 15px;
+            padding: 10px;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            background-color: #f0f8ff;
+        }
+        audio {
+            width: 100%;
+            margin-top: 8px;
+            outline: none;
+        }
+        /* 提示样式 */
+        .error { color: #dc3545; }
+        .success { color: #28a745; }
+        .loading { color: #666; font-style: italic; }
+        .audio-tip { color: #007bff; font-size: 14px; margin-bottom: 8px; }
+        .audio-error { color: #dc3545; font-size: 14px; margin-bottom: 8px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 style="text-align: center; margin-bottom: 30px; color: #333;"> AI Agent</h1>
+        
+        <!-- 输入区域（不变） -->
+        <div class="input-group">
+            <label for="sessionId">会话ID（Session ID）：</label>
+            <input type="text" id="sessionId" placeholder="例如：session456" value="session456">
+        </div>
+        
+        <div class="input-group">
+            <label for="userId">用户ID（User ID）：</label>
+            <input type="text" id="userId" placeholder="例如：user123" value="user123">
+        </div>
+        
+        <div class="input-group">
+            <label for="userInput">对话内容：</label>
+            <textarea id="userInput" placeholder="请输入你想和Agent说的内容...">推荐一款适合我的饮品</textarea>
+        </div>
+        
+        <button id="submitBtn">发送请求</button>
+        
+        <!-- 结果展示区域（不变） -->
+        <div class="input-group">
+            <label>Agent回复结果：</label>
+            <div id="result" class="result-area">
+                点击“发送请求”获取回复...
+            </div>
+        </div>
+
+        <!-- 语音播放区域（核心修改：播放URL） -->
+        <div class="input-group">
+            <label>语音播放：</label>
+            <div id="audioArea" class="audio-area" style="display: none;">
+                <div id="audioTip"></div>
+                <audio id="audioPlayer" controls></audio>
+                <!-- 新增：显示音频URL（可选，用于调试） -->
+                <div style="margin-top: 8px; font-size: 12px; color: #666;" id="audioUrlTip"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // 缓存DOM元素
+            const resultDom = document.getElementById('result');
+            const audioAreaDom = document.getElementById('audioArea');
+            const audioTipDom = document.getElementById('audioTip');
+            const audioPlayerDom = document.getElementById('audioPlayer');
+            const audioUrlTipDom = document.getElementById('audioUrlTip');
+            const submitBtn = document.getElementById('submitBtn');
+
+            // 绑定按钮点击事件
+            submitBtn.addEventListener('click', async function() {
+                // 1. 获取输入值（不变）
+                const sessionId = document.getElementById('sessionId').value.trim();
+                const userId = document.getElementById('userId').value.trim();
+                const userInput = document.getElementById('userInput').value.trim();
+                
+                // 2. 校验输入（不变）
+                if (!sessionId || !userId || !userInput) {
+                    resultDom.innerHTML = '<span class="error">错误：会话ID、用户ID、对话内容不能为空！</span>';
+                    audioAreaDom.style.display = 'none';
+                    return;
+                }
+                
+                // 3. 重置状态（不变）
+                resultDom.innerHTML = '<span class="loading">正在调用Agent接口，请稍候...</span>';
+                audioAreaDom.style.display = 'none';
+                audioPlayerDom.src = '';
+                audioUrlTipDom.innerText = '';
+                
+                try {
+                    // 4. 调用接口（不变）
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+                    const response = await fetch('/agent/chat', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            session_id: sessionId,
+                            user_id: userId,
+                            input: userInput
+                        }),
+                        signal: controller.signal,
+                        rejectUnauthorized: false
+                    });
+
+                    clearTimeout(timeoutId);
+
+                    if (!response.ok) {
+                        let errMsg = `请求失败（状态码：${response.status}）`;
+                        try {
+                            const errData = await response.json();
+                            errMsg = `请求失败：${errData.msg || errMsg}`;
+                        } catch (e) {}
+                        resultDom.innerHTML = `<span class="error">${errMsg}</span>`;
+                        return;
+                    }
+
+                    // 5. 解析响应（核心修改：读取audio_url）
+                    const data = await response.json();
+                    
+                    if (data.code === 200) {
+                        // 展示文本回复
+                        resultDom.innerHTML = `<span class="success">${data.data.text || data.data}</span>`;
+                        
+                        // 处理语音播放（核心修改：使用audio_url）
+                        audioAreaDom.style.display = 'block';
+                        if (data.data.tts_ok && data.data.audio_url) {
+                            // 直接设置音频URL（无需Base64转换）
+                            audioPlayerDom.src = data.data.audio_url;
+                            audioTipDom.className = 'audio-tip';
+                            audioTipDom.innerText = '✅ 语音生成成功，可点击播放（或自动播放）';
+                            // 显示音频URL（调试用）
+                            audioUrlTipDom.innerText = `音频临时URL：${data.data.audio_url}（URL有过期时间）`;
+                            
+                            // 尝试自动播放
+                            audioPlayerDom.play().catch(err => {
+                                audioTipDom.innerText = '✅ 语音生成成功，请手动点击播放按钮';
+                            });
+                        } else {
+                            // 语音生成失败
+                            audioTipDom.className = 'audio-error';
+                            audioTipDom.innerText = `⚠️ 语音生成失败：${data.data.tts_err || '未知原因'}`;
+                            audioPlayerDom.src = '';
+                            audioUrlTipDom.innerText = '';
+                        }
+                    } else {
+                        resultDom.innerHTML = `<span class="error">接口返回错误：${data.msg}</span>`;
+                        audioAreaDom.style.display = 'none';
+                    }
+                } catch (error) {
+                    if (error.name === 'AbortError') {
+                        resultDom.innerHTML = '<span class="error">请求超时（10秒），请检查服务是否正常！</span>';
+                    } else {
+                        resultDom.innerHTML = `<span class="error">请求失败：${error.message}</span>`;
+                    }
+                    audioAreaDom.style.display = 'none';
+                }
+            });
+        });
+    </script>
+</body>
+</html>
