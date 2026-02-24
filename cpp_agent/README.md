@@ -9,6 +9,7 @@
 - **长期记忆**: 保存用户的偏好关键词
 - **短期记忆**: 保存最近10轮对话上下文
 - **HTTP服务**: 提供RESTful API接口
+- **IDE支持**: 自动生成compile_commands.json，支持代码跳转和智能提示
 
 ## 依赖要求
 
@@ -81,10 +82,10 @@ cp config.json.example config.json
 
 ```json
 {
-  "dashscope_api_key": "your_dashscope_api_key_here",
+  "dashscope_api_key": "sk-21c5679fdf204dc9928a322e2738a75f",
   "aliyun_tts_key": "sk-21c5679fdf204dc9928a322e2738a75f",
   "log_level": "INFO",
-  "log_file": "",
+  "log_file": "./logs/app.log",
   "server_port": 8443,
   "data_dir": "./data"
 }
@@ -208,12 +209,37 @@ cpp_agent/
     └── long_term_memory.json  # 长期记忆存储文件
 ```
 
+## IDE配置
+
+### 代码跳转和智能提示
+
+项目已配置自动生成 `compile_commands.json`，支持IDE代码跳转：
+
+1. **运行构建脚本**（会自动生成compile_commands.json）：
+   ```bash
+   ./build_and_deploy.sh
+   # 或
+   ./build.sh
+   ```
+
+2. **VS Code / Cursor**：
+   - 已包含 `.vscode/c_cpp_properties.json` 配置
+   - 如果使用clangd扩展，已包含 `.clangd` 配置
+   - 重启IDE后即可使用代码跳转
+
+3. **CLion**：
+   - 自动检测CMakeLists.txt
+   - 确保启用 "Export compile commands"
+
+详细配置说明请参考 [IDE_SETUP.md](IDE_SETUP.md)
+
 ## 注意事项
 
 1. 本实现使用简单的HTTP服务器，仅支持基本的HTTP请求处理
 2. JSON解析使用正则表达式，对于复杂JSON可能不够健壮
 3. 长期记忆数据存储在 `data/long_term_memory.json` 文件中
-4. 服务默认监听8443端口，如需修改请编辑 `main.cpp` 中的端口号
+4. 服务端口在 `config.json` 中配置（默认8443）
+5. 首次使用前需要运行构建脚本生成 `compile_commands.json` 以支持IDE代码跳转
 
 ## 与Go版本的差异
 

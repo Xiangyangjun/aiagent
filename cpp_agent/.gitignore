@@ -18,12 +18,18 @@ CMakeFiles/
 cmake_install.cmake
 Makefile
 
-# IDE文件
-.vscode/
+# 编译数据库（可选，如果希望提交到git可以注释掉）
+# compile_commands.json
+
+# IDE文件（保留.vscode配置，但忽略用户特定设置）
+.vscode/settings.json
 .idea/
 *.swp
 *.swo
 *~
+
+# 但保留公共配置文件
+!.vscode/c_cpp_properties.json
 
 # 配置文件（包含敏感信息）
 config.json

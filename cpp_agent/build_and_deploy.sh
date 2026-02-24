@@ -63,7 +63,14 @@ if [ "$BUILD_TYPE" != "Release" ] && [ "$BUILD_TYPE" != "Debug" ]; then
 fi
 
 echo "  构建类型: $BUILD_TYPE"
-cmake .. -DCMAKE_BUILD_TYPE=$BUILD_TYPE
+# 生成compile_commands.json用于IDE代码跳转
+cmake .. -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+# 创建符号链接到项目根目录（方便IDE查找）
+if [ -f compile_commands.json ]; then
+    ln -sf build/compile_commands.json ../compile_commands.json 2>/dev/null || true
+    echo "✓ 已生成compile_commands.json（用于IDE代码跳转）"
+fi
 if [ $? -ne 0 ]; then
     echo "错误: CMake配置失败"
     exit 1

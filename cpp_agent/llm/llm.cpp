@@ -3,6 +3,7 @@
 #include "../memory/long_term.h"
 #include "../utils/logger.h"
 #include "../utils/config.h"
+#include "../utils/json_parser.h"
 #include <curl/curl.h>
 #include <iostream>
 #include <sstream>
@@ -45,41 +46,8 @@ std::string extractHabitKeywords(const std::string& user_id) {
     
     std::string api_url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation";
     
-    // 转义JSON字符串（更严格的转义）
     std::string prompt_str = prompt.str();
-    std::string json_escaped_prompt;
-    json_escaped_prompt.reserve(prompt_str.length() * 2);
-    
-    for (size_t i = 0; i < prompt_str.length(); ++i) {
-        unsigned char c = static_cast<unsigned char>(prompt_str[i]);
-        
-        if (c < 0x20) {
-            switch (c) {
-                case '\n': json_escaped_prompt += "\\n"; break;
-                case '\r': json_escaped_prompt += "\\r"; break;
-                case '\t': json_escaped_prompt += "\\t"; break;
-                case '\b': json_escaped_prompt += "\\b"; break;
-                case '\f': json_escaped_prompt += "\\f"; break;
-                default:
-                    // 其他控制字符使用Unicode转义
-                    {
-                        char hex[5];
-                        snprintf(hex, sizeof(hex), "\\u%04x", c);
-                        json_escaped_prompt += hex;
-                    }
-                    break;
-            }
-        } else {
-            switch (c) {
-                case '"': json_escaped_prompt += "\\\""; break;
-                case '\\': json_escaped_prompt += "\\\\"; break;
-                case '/': json_escaped_prompt += "\\/"; break;
-                default:
-                    json_escaped_prompt += c;
-                    break;
-            }
-        }
-    }
+    std::string json_escaped_prompt = utils::JsonParser::escapeJsonString(prompt_str);
     
     std::ostringstream json_body;
     json_body << "{"
@@ -136,80 +104,7 @@ std::string extractHabitKeywords(const std::string& user_id) {
         return "无";
     }
     
-    // 改进的JSON解析：支持转义字符和嵌套结构
-    // 查找 message.content 路径
-    std::string keywords;
-    size_t message_pos = response_data.data.find("\"message\"");
-    if (message_pos != std::string::npos) {
-        size_t content_pos = response_data.data.find("\"content\"", message_pos);
-        if (content_pos != std::string::npos) {
-            size_t colon_pos = response_data.data.find(':', content_pos);
-            if (colon_pos != std::string::npos) {
-                size_t value_start = colon_pos + 1;
-                while (value_start < response_data.data.length() && 
-                       (response_data.data[value_start] == ' ' || 
-                        response_data.data[value_start] == '\t' ||
-                        response_data.data[value_start] == '\n' ||
-                        response_data.data[value_start] == '\r')) {
-                    value_start++;
-                }
-                
-                if (value_start < response_data.data.length() && response_data.data[value_start] == '"') {
-                    value_start++;
-                    size_t value_end = value_start;
-                    bool escaped = false;
-                    
-                    while (value_end < response_data.data.length()) {
-                        if (escaped) {
-                            escaped = false;
-                            value_end++;
-                            continue;
-                        }
-                        if (response_data.data[value_end] == '\\') {
-                            escaped = true;
-                            value_end++;
-                            continue;
-                        }
-                        if (response_data.data[value_end] == '"') {
-                            break;
-                        }
-                        value_end++;
-                    }
-                    
-                    if (value_end > value_start) {
-                        keywords = response_data.data.substr(value_start, value_end - value_start);
-                        
-                        // 处理转义字符
-                        std::string unescaped;
-                        for (size_t i = 0; i < keywords.length(); ++i) {
-                            if (keywords[i] == '\\' && i + 1 < keywords.length()) {
-                                switch (keywords[i + 1]) {
-                                    case 'n': unescaped += '\n'; i++; break;
-                                    case 'r': unescaped += '\r'; i++; break;
-                                    case 't': unescaped += '\t'; i++; break;
-                                    case '"': unescaped += '"'; i++; break;
-                                    case '\\': unescaped += '\\'; i++; break;
-                                    default: unescaped += keywords[i]; break;
-                                }
-                            } else {
-                                unescaped += keywords[i];
-                            }
-                        }
-                        keywords = unescaped;
-                    }
-                }
-            }
-        }
-    }
-    
-    // 如果上面的方法失败，尝试简单的正则表达式
-    if (keywords.empty()) {
-        std::regex content_regex(R"xxx("content"\s*:\s*"([^"]*)")xxx");
-        std::smatch match;
-        if (std::regex_search(response_data.data, match, content_regex)) {
-            keywords = match[1].str();
-        }
-    }
+    std::string keywords = utils::JsonParser::extractContentFromNestedJson(response_data.data);
     
     if (!keywords.empty()) {
         // 去除首尾空格
@@ -266,43 +161,7 @@ std::string callLLM(const std::string& /* session_id */,
     
     std::string api_url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation";
     
-    // 转义JSON字符串中的特殊字符（更严格的转义）
-    std::string escaped_prompt = prompt.str();
-    std::string json_escaped;
-    json_escaped.reserve(escaped_prompt.length() * 2); // 预分配空间
-    
-    for (size_t i = 0; i < escaped_prompt.length(); ++i) {
-        unsigned char c = static_cast<unsigned char>(escaped_prompt[i]);
-        
-        // 控制字符和特殊字符转义
-        if (c < 0x20) {
-            switch (c) {
-                case '\n': json_escaped += "\\n"; break;
-                case '\r': json_escaped += "\\r"; break;
-                case '\t': json_escaped += "\\t"; break;
-                case '\b': json_escaped += "\\b"; break;
-                case '\f': json_escaped += "\\f"; break;
-                default:
-                    // 其他控制字符使用Unicode转义
-                    {
-                        char hex[5];
-                        snprintf(hex, sizeof(hex), "\\u%04x", c);
-                        json_escaped += hex;
-                    }
-                    break;
-            }
-        } else {
-            switch (c) {
-                case '"': json_escaped += "\\\""; break;
-                case '\\': json_escaped += "\\\\"; break;
-                case '/': json_escaped += "\\/"; break; // 可选，但更安全
-                default:
-                    // UTF-8字符直接添加（包括中文字符）
-                    json_escaped += c;
-                    break;
-            }
-        }
-    }
+    std::string json_escaped = utils::JsonParser::escapeJsonString(prompt.str());
     
     std::ostringstream json_body;
     json_body << "{"
@@ -319,19 +178,15 @@ std::string callLLM(const std::string& /* session_id */,
               << "}"
               << "}";
     
-    // 记录请求体（用于调试）
     std::string request_body = json_body.str();
     LOG_DEBUG("LLM", "请求体: " + request_body.substr(0, 500));
-    
+
     CURL* curl = curl_easy_init();
     if (!curl) {
         throw std::runtime_error("请求创建失败");
     }
     
     WriteData response_data;
-    
-    std::string request_body = json_body.str();
-    LOG_DEBUG("LLM", "请求体: " + request_body.substr(0, 500));
     
     // 设置请求头（必须在设置POSTFIELDS之前）
     struct curl_slist* headers = nullptr;
@@ -366,87 +221,7 @@ std::string callLLM(const std::string& /* session_id */,
     // 记录响应内容（用于调试）
     LOG_DEBUG("LLM", "API响应: " + response_data.data.substr(0, 500)); // 只记录前500字符
     
-    // 解析JSON响应结构：output.choices[0].message.content
-    // 响应格式：{"output":{"choices":[{"message":{"content":"..."}}]}}
-    std::string reply;
-    
-    // 方法1：查找 "message" -> "content" 路径
-    size_t message_pos = response_data.data.find("\"message\"");
-    if (message_pos != std::string::npos) {
-        size_t content_pos = response_data.data.find("\"content\"", message_pos);
-        if (content_pos != std::string::npos) {
-            // 找到content字段后的冒号
-            size_t colon_pos = response_data.data.find(':', content_pos);
-            if (colon_pos != std::string::npos) {
-                // 跳过空白字符
-                size_t value_start = colon_pos + 1;
-                while (value_start < response_data.data.length() && 
-                       (response_data.data[value_start] == ' ' || 
-                        response_data.data[value_start] == '\t' ||
-                        response_data.data[value_start] == '\n' ||
-                        response_data.data[value_start] == '\r')) {
-                    value_start++;
-                }
-                
-                // 检查是否是字符串值（以引号开始）
-                if (value_start < response_data.data.length() && response_data.data[value_start] == '"') {
-                    value_start++; // 跳过开始引号
-                    size_t value_end = value_start;
-                    bool escaped = false;
-                    
-                    // 查找结束引号（考虑转义）
-                    while (value_end < response_data.data.length()) {
-                        if (escaped) {
-                            escaped = false;
-                            value_end++;
-                            continue;
-                        }
-                        if (response_data.data[value_end] == '\\') {
-                            escaped = true;
-                            value_end++;
-                            continue;
-                        }
-                        if (response_data.data[value_end] == '"') {
-                            break; // 找到结束引号
-                        }
-                        value_end++;
-                    }
-                    
-                    if (value_end > value_start) {
-                        reply = response_data.data.substr(value_start, value_end - value_start);
-                        
-                        // 处理转义字符
-                        std::string unescaped_reply;
-                        for (size_t i = 0; i < reply.length(); ++i) {
-                            if (reply[i] == '\\' && i + 1 < reply.length()) {
-                                switch (reply[i + 1]) {
-                                    case 'n': unescaped_reply += '\n'; i++; break;
-                                    case 'r': unescaped_reply += '\r'; i++; break;
-                                    case 't': unescaped_reply += '\t'; i++; break;
-                                    case '"': unescaped_reply += '"'; i++; break;
-                                    case '\\': unescaped_reply += '\\'; i++; break;
-                                    case '/': unescaped_reply += '/'; i++; break;
-                                    case 'u': 
-                                        // Unicode转义（简化处理，跳过4个字符）
-                                        if (i + 5 < reply.length()) {
-                                            unescaped_reply += '?'; // 占位符
-                                            i += 5;
-                                        } else {
-                                            unescaped_reply += reply[i];
-                                        }
-                                        break;
-                                    default: unescaped_reply += reply[i]; break;
-                                }
-                            } else {
-                                unescaped_reply += reply[i];
-                            }
-                        }
-                        reply = unescaped_reply;
-                    }
-                }
-            }
-        }
-    }
+    std::string reply = utils::JsonParser::extractContentFromNestedJson(response_data.data);
     
     // 如果上面的方法失败，尝试简单的正则表达式（向后兼容）
     if (reply.empty()) {
@@ -454,13 +229,13 @@ std::string callLLM(const std::string& /* session_id */,
         std::regex content_regex1(R"xxx("message"\s*:\s*\{[^}]*"content"\s*:\s*"([^"]*)")xxx");
         std::smatch match1;
         if (std::regex_search(response_data.data, match1, content_regex1)) {
-            reply = match1[1].str();
+            reply = utils::JsonParser::unescapeJsonString(match1[1].str());
         } else {
             // 尝试简单的content匹配
             std::regex content_regex2(R"xxx("content"\s*:\s*"([^"]*)")xxx");
             std::smatch match2;
             if (std::regex_search(response_data.data, match2, content_regex2)) {
-                reply = match2[1].str();
+                reply = utils::JsonParser::unescapeJsonString(match2[1].str());
             }
         }
     }

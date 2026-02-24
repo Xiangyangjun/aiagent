@@ -13,6 +13,8 @@
 #include "tts/tts.h"
 #include "utils/logger.h"
 #include "utils/config.h"
+#include "utils/http_utils.h"
+#include "utils/json_parser.h"
 
 // 简单的HTTP服务器实现（基于socket）
 #include <sys/socket.h>
@@ -20,7 +22,6 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <cstring>
-#include <regex>
 #include <signal.h>
 #include <limits.h>
 #include <sys/stat.h>
@@ -197,15 +198,7 @@ private:
         content << file.rdbuf();
         file.close();
         
-        // 确定Content-Type
-        std::string content_type = "text/html; charset=utf-8";
-        if (actual_path.find(".css") != std::string::npos) {
-            content_type = "text/css";
-        } else if (actual_path.find(".js") != std::string::npos) {
-            content_type = "application/javascript";
-        } else if (actual_path.find(".json") != std::string::npos) {
-            content_type = "application/json";
-        }
+        std::string content_type = utils::HttpUtils::getContentType(actual_path);
         
         std::ostringstream response;
         response << "HTTP/1.1 200 OK\r\n"
@@ -219,39 +212,27 @@ private:
     }
     
     std::string handleChatRequest(const std::string& request) {
-        // 提取JSON body
-        size_t body_start = request.find("\r\n\r\n");
-        if (body_start == std::string::npos) {
-            return createErrorResponse(400, "参数错误：缺少请求体");
+        std::string body = utils::HttpUtils::extractJsonBody(request);
+        if (body.empty()) {
+            return utils::HttpUtils::createErrorResponse(400, "参数错误：缺少请求体");
         }
-        
-        std::string body = request.substr(body_start + 4);
-        
-        // 简单的JSON解析
-        std::regex session_regex(R"xxx("session_id"\s*:\s*"([^"]*)")xxx");
-        std::regex user_regex(R"xxx("user_id"\s*:\s*"([^"]*)")xxx");
-        std::regex input_regex(R"xxx("input"\s*:\s*"([^"]*)")xxx");
-        
-        std::smatch match;
-        std::string session_id, user_id, user_input;
-        
-        if (!std::regex_search(body, match, session_regex)) {
-            return createErrorResponse(400, "参数错误：缺少session_id");
+
+        std::string session_id = utils::JsonParser::extractString(body, "session_id", "");
+        std::string user_id = utils::JsonParser::extractString(body, "user_id", "");
+        std::string user_input = utils::JsonParser::extractString(body, "input", "");
+
+        if (session_id.empty()) {
+            return utils::HttpUtils::createErrorResponse(400, "参数错误：缺少session_id");
         }
-        session_id = match[1].str();
-        
-        if (!std::regex_search(body, match, user_regex)) {
-            return createErrorResponse(400, "参数错误：缺少user_id");
+        if (user_id.empty()) {
+            return utils::HttpUtils::createErrorResponse(400, "参数错误：缺少user_id");
         }
-        user_id = match[1].str();
-        
-        if (!std::regex_search(body, match, input_regex)) {
-            return createErrorResponse(400, "参数错误：缺少input");
+        if (user_input.empty()) {
+            return utils::HttpUtils::createErrorResponse(400, "参数错误：缺少input");
         }
-        user_input = match[1].str();
         
         if (user_id.empty()) {
-            return createErrorResponse(400, "UserID不能为空");
+            return utils::HttpUtils::createErrorResponse(400, "UserID不能为空");
         }
         
         try {
@@ -290,53 +271,32 @@ private:
                           << "\"code\":200,"
                           << "\"msg\":\"success\","
                           << "\"data\":{"
-                          << "\"text\":\"" << escapeJson(reply_text) << "\","
-                          << "\"audio_url\":\"" << escapeJson(audio_url) << "\","
+                          << "\"text\":\"" << utils::JsonParser::escapeJsonString(reply_text) << "\","
+                          << "\"audio_url\":\"" << utils::JsonParser::escapeJsonString(audio_url) << "\","
                           << "\"tts_ok\":" << (tts_ok ? "true" : "false") << ","
-                          << "\"tts_err\":\"" << escapeJson(tts_error) << "\""
+                          << "\"tts_err\":\"" << utils::JsonParser::escapeJsonString(tts_error) << "\""
                           << "}"
                           << "}";
-            
-            std::ostringstream response;
-            response << "HTTP/1.1 200 OK\r\n"
-                     << "Content-Type: application/json; charset=utf-8\r\n"
-                     << "Access-Control-Allow-Origin: *\r\n"
-                     << "Access-Control-Allow-Methods: GET, POST\r\n"
-                     << "Access-Control-Allow-Headers: Content-Type\r\n"
-                     << "Content-Length: " << json_response.str().length() << "\r\n"
-                     << "\r\n"
-                     << json_response.str();
-            
-            return response.str();
+
+            return utils::HttpUtils::createJsonResponse(json_response.str());
             
         } catch (const std::exception& e) {
-            return createErrorResponse(500, "生成回复失败：" + std::string(e.what()));
+            return utils::HttpUtils::createErrorResponse(500, "生成回复失败：" + std::string(e.what()));
         }
     }
     
     std::string handleSavePreferRequest(const std::string& request) {
-        size_t body_start = request.find("\r\n\r\n");
-        if (body_start == std::string::npos) {
-            return createErrorResponse(400, "参数错误：缺少请求体");
+        std::string body = utils::HttpUtils::extractJsonBody(request);
+        if (body.empty()) {
+            return utils::HttpUtils::createErrorResponse(400, "参数错误：缺少请求体");
         }
-        
-        std::string body = request.substr(body_start + 4);
-        
-        std::regex user_regex(R"xxx("user_id"\s*:\s*"([^"]*)")xxx");
-        std::regex key_regex(R"xxx("key"\s*:\s*"([^"]*)")xxx");
-        std::regex value_regex(R"xxx("value"\s*:\s*"([^"]*)")xxx");
-        
-        std::smatch match;
-        std::string user_id, key, value;
-        
-        if (std::regex_search(body, match, user_regex)) {
-            user_id = match[1].str();
-        }
-        if (std::regex_search(body, match, key_regex)) {
-            key = match[1].str();
-        }
-        if (std::regex_search(body, match, value_regex)) {
-            value = match[1].str();
+
+        std::string user_id = utils::JsonParser::extractString(body, "user_id", "");
+        std::string key = utils::JsonParser::extractString(body, "key", "");
+        std::string value = utils::JsonParser::extractString(body, "value", "");
+
+        if (user_id.empty() || key.empty() || value.empty()) {
+            return utils::HttpUtils::createErrorResponse(400, "参数错误：缺少必要字段");
         }
         
         if (key == "keywords") {
@@ -346,46 +306,8 @@ private:
         
         std::ostringstream json_response;
         json_response << "{\"code\":200,\"msg\":\"偏好保存成功\"}";
-        
-        std::ostringstream response;
-        response << "HTTP/1.1 200 OK\r\n"
-                 << "Content-Type: application/json; charset=utf-8\r\n"
-                 << "Access-Control-Allow-Origin: *\r\n"
-                 << "Content-Length: " << json_response.str().length() << "\r\n"
-                 << "\r\n"
-                 << json_response.str();
-        
-        return response.str();
-    }
-    
-    std::string createErrorResponse(int code, const std::string& msg) {
-        std::ostringstream json_response;
-        json_response << "{\"code\":" << code << ",\"msg\":\"" << escapeJson(msg) << "\",\"data\":null}";
-        
-        std::ostringstream response;
-        response << "HTTP/1.1 " << code << " " << (code == 400 ? "Bad Request" : "Internal Server Error") << "\r\n"
-                 << "Content-Type: application/json; charset=utf-8\r\n"
-                 << "Access-Control-Allow-Origin: *\r\n"
-                 << "Content-Length: " << json_response.str().length() << "\r\n"
-                 << "\r\n"
-                 << json_response.str();
-        
-        return response.str();
-    }
-    
-    std::string escapeJson(const std::string& str) {
-        std::string escaped;
-        for (char c : str) {
-            switch (c) {
-                case '"': escaped += "\\\""; break;
-                case '\\': escaped += "\\\\"; break;
-                case '\n': escaped += "\\n"; break;
-                case '\r': escaped += "\\r"; break;
-                case '\t': escaped += "\\t"; break;
-                default: escaped += c; break;
-            }
-        }
-        return escaped;
+
+        return utils::HttpUtils::createJsonResponse(json_response.str());
     }
     
     int port_;

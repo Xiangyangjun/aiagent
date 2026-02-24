@@ -1,6 +1,7 @@
 #include "tts.h"
 #include "../utils/config.h"
 #include "../utils/logger.h"
+#include "../utils/json_parser.h"
 #include <curl/curl.h>
 #include <iostream>
 #include <cstdlib>
@@ -33,19 +34,8 @@ std::string generateSpeech(const std::string& text) {
     }
     
     std::string api_url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
-    
-    // 转义JSON字符串中的特殊字符
-    std::string json_escaped_text;
-    for (char c : text) {
-        switch (c) {
-            case '"': json_escaped_text += "\\\""; break;
-            case '\\': json_escaped_text += "\\\\"; break;
-            case '\n': json_escaped_text += "\\n"; break;
-            case '\r': json_escaped_text += "\\r"; break;
-            case '\t': json_escaped_text += "\\t"; break;
-            default: json_escaped_text += c; break;
-        }
-    }
+
+    std::string json_escaped_text = utils::JsonParser::escapeJsonString(text);
     
     std::ostringstream json_body;
     json_body << "{"
@@ -60,6 +50,10 @@ std::string generateSpeech(const std::string& text) {
               << "\"type\":\"audio\""
               << "}"
               << "}";
+
+    // 重要：json_body.str() 是临时对象，必须先落到string里再把c_str()给curl
+    std::string request_body = json_body.str();
+    LOG_DEBUG("TTS", "请求体: " + request_body.substr(0, 500));
     
     CURL* curl = curl_easy_init();
     if (!curl) {
@@ -68,17 +62,18 @@ std::string generateSpeech(const std::string& text) {
     
     WriteData response_data;
     
-    curl_easy_setopt(curl, CURLOPT_URL, api_url.c_str());
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_body.str().c_str());
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_data);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
-    
     struct curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
     std::string auth_header = "Authorization: Bearer " + api_key;
     headers = curl_slist_append(headers, auth_header.c_str());
+
+    curl_easy_setopt(curl, CURLOPT_URL, api_url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request_body.c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(request_body.length()));
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_data);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
     
     long response_code = 0;
     CURLcode res = curl_easy_perform(curl);
@@ -87,18 +82,22 @@ std::string generateSpeech(const std::string& text) {
     curl_easy_cleanup(curl);
     
     if (res != CURLE_OK) {
+        LOG_ERROR("TTS", "调用TTS接口失败: " + std::string(curl_easy_strerror(res)));
         throw std::runtime_error("调用TTS接口失败");
     }
     
     if (response_code != 200) {
-        throw std::runtime_error("TTS接口返回错误，状态码: " + std::to_string(response_code));
+        LOG_ERROR("TTS", "TTS接口返回错误，状态码: " + std::to_string(response_code));
+        LOG_ERROR("TTS", "响应内容: " + response_data.data.substr(0, 800));
+        throw std::runtime_error("TTS接口返回错误，状态码: " + std::to_string(response_code) +
+                                 "，响应内容: " + response_data.data.substr(0, 300));
     }
     
     // 解析响应，提取URL字段
     std::regex url_regex(R"xxx("url"\s*:\s*"([^"]*)")xxx");
     std::smatch match;
     if (std::regex_search(response_data.data, match, url_regex)) {
-        std::string audio_url = match[1].str();
+        std::string audio_url = utils::JsonParser::unescapeJsonString(match[1].str());
         if (audio_url.empty()) {
             throw std::runtime_error("TTS接口未返回音频URL");
         }

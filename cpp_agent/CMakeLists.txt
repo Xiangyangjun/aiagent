@@ -4,6 +4,9 @@ project(cpp_agent)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# 生成compile_commands.json（用于IDE代码跳转和智能提示）
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # 查找依赖库
 find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
@@ -44,6 +47,8 @@ set(SOURCES
     tts/tts.cpp
     utils/logger.cpp
     utils/config.cpp
+    utils/json_parser.cpp
+    utils/http_utils.cpp
 )
 
 # 头文件
@@ -54,6 +59,8 @@ set(HEADERS
     tts/tts.h
     utils/logger.h
     utils/config.h
+    utils/json_parser.h
+    utils/http_utils.h
 )
 
 # 添加可执行文件
